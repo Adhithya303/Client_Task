@@ -1,25 +1,26 @@
 # User App — Push Notification Demo
 
 React + TypeScript + Vite app that requests notification permission, obtains a
-real Firebase Cloud Messaging (FCM) token, receives real-time foreground & background
-push notifications, and (in Part 3) synchronizes device tokens with a shared FastAPI backend.
+real Firebase Cloud Messaging (FCM) token, receives push notifications in the foreground and
+background, and automatically persists the device token to a local FastAPI + MongoDB backend.
 
-**Current status: Part 2 of 3 (Firebase Browser Integration complete).**
+**Current status: Part 3 Complete (Scaffold, Firebase Integration, and Backend Token Registration).**
 
 ---
 
 ## Prerequisites
 
-- Node.js `20.19+` or `22.12+` (required by Vite 8). Check with `node -v`.
-- npm (bundled with Node.js).
-- Modern Chromium browser (Chrome, Edge, Brave) or Firefox.
-- Internet access to connect to Google Firebase endpoints and retrieve the FCM token.
+- **Node.js**: `20.19+` or `22.12+` (required by Vite 8). Check with `node -v`.
+- **npm**: Bundled with Node.js.
+- **Modern Browser**: Chrome, Edge, Brave, or Firefox.
+- **FastAPI Backend**: Running locally on `http://localhost:8000` (see `backend/README.md`).
+- **MongoDB**: Running locally on port `27017`.
 
 ---
 
 ## 1. Setup & Configuration
 
-Run all commands from `apps/user-app`:
+Run from `apps/user-app`:
 
 ```powershell
 npm install
@@ -46,22 +47,32 @@ Fill in the values in `apps/user-app/.env.local`:
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | Firebase Web App (`messagingSenderId`) |
 | `VITE_FIREBASE_APP_ID` | Firebase Web App (`appId`) |
 | `VITE_FIREBASE_VAPID_KEY` | Firebase Console → Project settings → Cloud Messaging → Web Push certificates |
-| `VITE_API_BASE_URL` | `http://localhost:8000` (FastAPI backend in Part 3) |
+| `VITE_API_BASE_URL` | `http://localhost:8000` (FastAPI backend) |
 
 > **Note:** Both teammates use the **same** Firebase project and web app configuration.
 > Restart Vite (`npm run dev`) after creating or editing `.env.local`.
 
 ---
 
-## 2. Running the Application
+## 2. Running the Application (Windows PowerShell)
 
+Open two terminals:
+
+### Terminal 1: Start the Backend (FastAPI + MongoDB)
 ```powershell
+cd c:\Users\adhit\Downloads\Client_Task\backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+### Terminal 2: Start the User App (React + Vite)
+```powershell
+cd c:\Users\adhit\Downloads\Client_Task\apps\user-app
 npm run dev
 ```
 
 Open `http://localhost:5173`. Always test on `localhost` (browsers only permit Service Workers and Notification permissions on HTTPS or `localhost`).
 
-Other commands:
+Other commands (run from `apps/user-app`):
 ```powershell
 npm run build     # Type check (app + SW) + production build
 npm run lint      # oxlint
@@ -70,65 +81,54 @@ npm run preview   # preview production build on http://localhost:4173
 
 ---
 
-## 3. Service Worker Strategy
+## 3. End-to-End Verification with MongoDB Compass
 
-Firebase Cloud Messaging requires a service worker named `firebase-messaging-sw.js` at root scope (`/`).
+Follow these steps to confirm token generation and idempotent MongoDB persistence:
 
-### How It Works:
-1. **Source of Truth:** The service worker source is written in TypeScript at `src/service-worker/firebase-messaging-sw.ts`.
-2. **Environment Variable Injection:** Service workers cannot directly access `import.meta.env`. Our custom Vite plugin (`src/plugins/firebaseSwPlugin.ts`) reads the active Vite environment configuration and defines `process.env.VITE_FIREBASE_*` constants into the bundle.
-3. **Dual Execution Mode:**
-   - **Development (`npm run dev`):** The plugin intercepts requests for `/firebase-messaging-sw.js` via Vite dev server middleware and serves the bundled, modular worker directly in memory.
-   - **Production (`npm run build`):** The plugin bundles the worker during `closeBundle` into `dist/firebase-messaging-sw.js` with `iife` format.
-4. **Duplicate Notification Prevention:**
-   - For messages containing a `notification` payload (such as test messages composed in Firebase Console), the Firebase SDK automatically displays the system notification when the tab is in the background.
-   - The service worker only invokes `self.registration.showNotification()` for **data-only** messages to avoid duplicate notifications.
-5. **Secure Click Handling:** Notification clicks safely focus an existing tab on the same origin or open a same-origin window.
+1. **Verify Backend is Ready:**
+   - In your browser, open `http://127.0.0.1:8000/docs` to inspect the FastAPI OpenAPI UI.
+   - You can also test `http://127.0.0.1:8000/ready` to verify `{"status": "ready", "database": "connected"}`.
 
----
+2. **Generate Token & Save to MongoDB:**
+   - In the user app at `http://localhost:5173`, click **“Enable notifications”** (or **“Refresh FCM Token”**).
+   - If prompted, click **Allow** in the browser permission dialog.
+   - The app will retrieve an FCM token and automatically send it to `http://localhost:8000/api/devices/register`.
+   - The **Device Registration** card updates to:
+     - Badge: **Saved to MongoDB**
+     - MongoDB Persistence: **✓ Persisted in notify collection**
+     - Registration ID: Displays the real MongoDB document string ID (e.g. `672152864c3c3a4f...`)
 
-## 4. Manual Testing with Firebase Console (Step-by-Step)
+3. **Inspect in MongoDB Compass:**
+   - Open **MongoDB Compass**.
+   - Connect to `mongodb://localhost:27017`.
+   - Click database **`fcm_notification_demo`**.
+   - Click collection **`notify`**.
+   - Confirm that a document exists with fields:
+     - `_id`: Document ObjectID matching the Registration ID displayed in the app.
+     - `token`: Your real FCM device token.
+     - `platform`: `"web"`.
+     - `created_at`: Server UTC timestamp.
+     - `updated_at`: Server UTC timestamp.
+     - `last_seen_at`: Server UTC timestamp.
 
-Follow these steps to verify real push notification delivery:
+4. **Verify Idempotency (No Duplicates):**
+   - Click **“Refresh FCM Token”** again in the React app.
+   - Return to MongoDB Compass and click **Refresh**.
+   - Verify that the total document count in `notify` has **not changed** (still 1 document for this token).
+   - Verify that `created_at` was preserved while `updated_at` and `last_seen_at` were refreshed.
 
-### Step 1: Generate your FCM Registration Token
-1. Run `npm run dev` and navigate to `http://localhost:5173`.
-2. Click **“Enable notifications”**.
-3. When the browser prompts "Do you want to allow notifications?", click **Allow**.
-4. The dashboard will update:
-   - Permission status updates to **Granted**.
-   - Firebase status updates to **Connected — token active**.
-   - Device registration card shows **Generated (local only)**.
-5. Click **“Copy token”** (or "Show token" to inspect it).
-
-### Step 2: Open Firebase Console Notification Composer
-1. Go to the [Firebase Console](https://console.firebase.google.com/).
-2. Select your project (`fcm-snippet`).
-3. In the left navigation, go to **Build** → **Cloud Messaging** (or **Engage** → **Messaging**).
-4. Click **New campaign** → **Notifications**.
-
-### Step 3: Compose and Send a Test Notification
-1. Enter a **Notification title** (e.g. `Test Push Message`).
-2. Enter a **Notification text** (e.g. `Hello from Firebase Console!`).
-3. Click the **“Send test message”** button on the right side.
-4. In the dialog, paste the **FCM registration token** you copied from the app.
-5. Click the **`+`** icon to add the token, then click **Test**.
-
-### Step 4: Verify Foreground Delivery
-- Keep the `http://localhost:5173` tab open and focused.
-- Within 1–3 seconds, the message will appear inside the **Notification Inbox** card on the dashboard showing the title, body, timestamp, and message ID.
-- No duplicate OS popup is created while focused.
-
-### Step 5: Verify Background Delivery
-- Send another test message from the Firebase Console.
-- Before clicking "Test", switch to another browser tab or minimize the browser window.
-- A native browser/OS notification popup will appear with the title and text.
-- Clicking the notification focuses the app tab.
+5. **Verify Error & Retry Handling:**
+   - Stop the backend terminal (`Ctrl + C`).
+   - Click **“Refresh FCM Token”**.
+   - The Device Registration card will update to **Registration failed** with notice: *"Token ready — database registration failed: Could not connect to backend..."*.
+   - The FCM token and notification inbox remain completely functional!
+   - Restart the backend terminal, then click **“Retry registration”** in the React app.
+   - The status immediately resolves to **Saved to MongoDB**.
 
 ---
 
-## 5. What Remains for Part 3
+## 4. What Remains for Later Milestones
 
-- **FastAPI backend:** Python REST API with token registration endpoints (`POST /api/devices/register`).
-- **MongoDB persistence:** Idempotent token storage with metadata and timestamps.
-- **Frontend sync:** Connecting `user-app` to persist the FCM token to the backend with clear loading, success, and error states.
+- **Admin App (`apps/admin-app`)**: Interface for composing notification titles and messages and sending them to registered devices.
+- **Backend Notification Sending**: Firebase Admin SDK server integration to dispatch FCM messages using service-account credentials.
+- **Android Packaging**: Capacitor integration and native Android push notification handling.
