@@ -87,6 +87,7 @@ def upsert_device_token(token: str, platform: str) -> str:
     Atomically register or update a device token in the notify collection.
     - Preserves created_at for existing registrations.
     - Updates platform, updated_at, and last_seen_at.
+    - Reactivates previously inactive tokens and clears unregistered_at.
     - Handles concurrent duplicate-key races cleanly.
     - Returns the document's string ID.
     """
@@ -105,6 +106,10 @@ def upsert_device_token(token: str, platform: str) -> str:
                         "platform": platform,
                         "updated_at": now,
                         "last_seen_at": now,
+                        "is_active": True,
+                    },
+                    "$unset": {
+                        "unregistered_at": "",
                     },
                 },
                 upsert=True,
@@ -119,6 +124,10 @@ def upsert_device_token(token: str, platform: str) -> str:
                         "platform": platform,
                         "updated_at": now,
                         "last_seen_at": now,
+                        "is_active": True,
+                    },
+                    "$unset": {
+                        "unregistered_at": "",
                     },
                 },
                 return_document=ReturnDocument.AFTER,
@@ -140,6 +149,96 @@ def upsert_device_token(token: str, platform: str) -> str:
         ) from err
     except PyMongoError as err:
         logger.error("Database error during registration: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def get_device_by_id(device_id: str) -> Optional[dict]:
+    """Retrieve device document by string ObjectId."""
+    try:
+        oid = ObjectId(device_id)
+    except Exception:
+        return None
+
+    try:
+        collection = get_notify_collection()
+        return collection.find_one({"_id": oid})
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during get_device_by_id: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during get_device_by_id: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def mark_device_inactive(device_id: str) -> None:
+    """
+    Mark device inactive with an unregistered_at timestamp after FCM reports it unregistered.
+    Does not delete the document.
+    """
+    try:
+        oid = ObjectId(device_id)
+    except Exception:
+        return
+
+    now = datetime.now(timezone.utc)
+    try:
+        collection = get_notify_collection()
+        collection.update_one(
+            {"_id": oid},
+            {
+                "$set": {
+                    "is_active": False,
+                    "unregistered_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during mark_device_inactive: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during mark_device_inactive: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def list_devices(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """
+    Return paginated devices sorted by recent activity (last_seen_at desc, _id desc) and total count.
+    Never exposes raw tokens outside DB layer without masking.
+    """
+    try:
+        collection = get_notify_collection()
+        total = collection.count_documents({})
+        cursor = (
+            collection.find({})
+            .sort([("last_seen_at", -1), ("_id", -1)])
+            .skip(offset)
+            .limit(limit)
+        )
+        return list(cursor), total
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during list_devices: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during list_devices: %s", type(err).__name__)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service error occurred",

@@ -4,7 +4,8 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import check_database_ready, close_database, init_database
-from app.routes import devices
+from app.firebase import init_firebase
+from app.routes import admin, devices
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +19,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Application starting up...")
     init_database()
+    # Non-fatal: missing/invalid Firebase credentials must not break MongoDB endpoints.
+    init_firebase()
     yield
     # Shutdown
     logger.info("Application shutting down...")
@@ -60,3 +63,6 @@ def readiness_check():
 
 # Include device registration routes
 app.include_router(devices.router)
+
+# Admin routes (protected by the X-Admin-Key dependency)
+app.include_router(admin.router)

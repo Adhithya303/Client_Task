@@ -20,6 +20,8 @@ build/
 *.key
 *serviceAccountKey*.json
 *firebase-adminsdk*.json
+*service-account*.json
+*serviceaccount*.json
 
 # Logs
 *.log

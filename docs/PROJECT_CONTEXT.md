@@ -1,6 +1,6 @@
 # Project Context: Push Notification System (FARM Stack + FCM)
 
-_Last updated: 2026-10-29 (after Part 3: Backend & Database Registration)._
+_Last updated: 2026-10-29 (after Part 4: Firebase Admin init + admin API key)._
 
 ## 1. Objective & Stack
 
@@ -71,13 +71,41 @@ Client_Task/
 │           │   └── dashboard.css
 │           └── types/
 │               └── index.ts
+│   └── admin-app/
+│       ├── .env.example          # VITE_API_BASE_URL=http://localhost:8000
+│       ├── .env.local            # git-ignored
+│       ├── .gitignore
+│       ├── .oxlintrc.json
+│       ├── README.md             # admin-app docs & three-terminal guide
+│       ├── index.html
+│       ├── package.json
+│       ├── tsconfig*.json
+│       ├── vite.config.ts        # port 5174, strictPort: true
+│       └── src/
+│           ├── App.tsx           # in-memory admin key, dashboard coordinator
+│           ├── main.tsx
+│           ├── index.css
+│           ├── vite-env.d.ts
+│           ├── components/
+│           │   ├── Header.tsx
+│           │   ├── ConnectCard.tsx
+│           │   ├── StatusCard.tsx
+│           │   ├── DeviceListCard.tsx
+│           │   ├── ComposerCard.tsx
+│           │   └── SendHistoryCard.tsx
+│           ├── services/
+│           │   └── api.ts        # typed admin API client (in-memory key, timeout, error mapping)
+│           ├── styles/
+│           │   └── admin.css
+│           └── types/
+│               └── index.ts
 └── backend/
     ├── .env.example              # template with default local MongoDB config
     ├── .env                      # local backend config (git-ignored)
-    ├── .venv/                    # Python 3.12 virtual environment
+    ├── .venv/                    # Python virtual environment
     ├── README.md                 # backend setup, API contract, Compass testing
     ├── pytest.ini                # pythonpath = . configuration
-    ├── requirements.txt          # fastapi, pydantic, pydantic-settings, uvicorn, pymongo, pytest, httpx
+    ├── requirements.txt          # fastapi, pydantic, pydantic-settings, uvicorn, pymongo, pytest, httpx, firebase-admin
     ├── app/
     │   ├── __init__.py
     │   ├── main.py               # FastAPI lifespan, CORS, health & ready probes
@@ -86,11 +114,16 @@ Client_Task/
     │   ├── schemas.py            # DeviceRegisterRequest/Response schemas (forbid extra)
     │   └── routes/
     │       ├── __init__.py
-    │       └── devices.py        # POST /api/devices/register route
+    │       ├── devices.py        # POST /api/devices/register route
+    │       └── admin.py          # GET /api/admin/status, /devices, POST /notifications/send
+    │   ├── auth.py               # require_admin_key dependency (X-Admin-Key, constant-time)
+    │   └── firebase.py           # Firebase Admin init (ADC, once), send_fcm_notification
     └── tests/
         ├── __init__.py
         ├── conftest.py           # test fixtures using fcm_notification_demo_test
-        └── test_devices.py       # 10 automated unit & integration tests
+        ├── test_devices.py       # 10 automated unit & integration tests
+        ├── test_admin.py         # 11 tests: admin key, mocked Firebase status, registration intact
+        └── test_notifications.py # 13 tests: device listing, sending, error mapping, reactivation
 ```
 
 ---
@@ -103,17 +136,21 @@ Client_Task/
 | User App Part 1 | Scaffold, dashboard UI, prerequisite + permission detection, env config | ✅ Done |
 | User App Part 2 | Firebase SDK, messaging service worker, permission request on click, real FCM token, foreground/background messages | ✅ Done |
 | User App Part 3 | FastAPI backend & MongoDB connection, device token registration API, user app wiring | ✅ Done (verified) |
-| Admin App & Sending | Notification sending backend API (Firebase Admin SDK), admin composer UI | ⏳ Pending |
-| Android Packaging | Capacitor integration, native push plugin, Android Firebase app, native token registration | ⏳ Pending |
+| Backend Part 4 | Firebase Admin init (ADC), admin API key dependency, `GET /api/admin/status` | ✅ Done |
+| Backend Part 5 | Device listing (`GET /api/admin/devices`), notification dispatch (`POST /api/admin/notifications/send`), inactive tracking | ✅ Done (34 tests pass) |
+| Admin App (UI) | Admin composer UI on port 5174 (device selector, compose, send) | ✅ Done (built, verified build & lint) |
+| System Verification | Automated checks (tests, build, lint, git exclusions, CORS/auth, credential safety) | ✅ Done (All automated checks pass) |
+| Manual Demo Run | End-to-end multi-app live delivery demonstration | ⏳ Pending manual operator run (see `docs/DEMO_CHECKLIST.md`) |
+| Android Packaging | Capacitor integration, native push plugin, Android Firebase app, native token registration | ⏳ Separate milestone |
 
 ---
 
 ## 4. Part 3 — What Was Built
 
 - **FastAPI Service:**
-  - Built with Python 3.12, Uvicorn, and PyMongo.
+  - Built with Python 3.11+, Uvicorn, and PyMongo.
   - Predictable `.env` loading using `Path(__file__).resolve().parent.parent / ".env"`.
-  - Strict CORS middleware allowing only configured frontend origins (`http://localhost:5173`).
+  - Strict CORS middleware allowing only configured frontend origins (`http://localhost:5173`, `http://localhost:5174`).
   - Lifespan context manager: validates MongoDB connectivity on startup, ensures unique index on `token`, and gracefully closes client on shutdown.
   - Sanitized error handling: returns HTTP 503 if database connectivity fails without leaking credentials or raw exceptions.
 - **MongoDB Persistence:**
@@ -130,6 +167,48 @@ Client_Task/
     - Retains token and message listener even if database registration fails.
     - Provides a dedicated "Retry registration" button that retries only the API request without re-prompting for permissions or regenerating the token.
     - Handles token changes safely with in-flight request guards.
+
+---
+
+## 4b. Part 4 — Firebase Admin Init & Admin Access
+
+- **Firebase Admin** (`app/firebase.py`, `firebase-admin` 7.x): Application Default Credentials via
+  `GOOGLE_APPLICATION_CREDENTIALS` in the **server process environment** (never `.env`, never frontend).
+  Initialized once at startup and reused; failure is non-fatal and recorded as a sanitized reason code.
+  Expected project is `FIREBASE_PROJECT_ID` (`fcm-snippet`); credentials for another project are rejected.
+  **"Initialized" does not prove permission to send FCM messages.**
+- **Admin auth** (`app/auth.py`): `require_admin_key` dependency, `X-Admin-Key` header vs `ADMIN_API_KEY`,
+  `hmac.compare_digest`; denies if missing/incorrect/unconfigured; key never logged. Local-demo only.
+  `/api/devices/register` is unchanged and does not require the key.
+- **`GET /api/admin/status`**: backend / MongoDB / Firebase Admin state; no secrets, paths, tokens, or raw errors.
+- Tests at this stage: 21 pass (Firebase mocked). Sending and the admin app were added in later parts (see 4c).
+
+---
+
+## 4c. Admin App (`apps/admin-app`, port 5174)
+
+- React + TypeScript + Vite, `strictPort: true` on **5174** (CORS allows 5173 and 5174 explicitly).
+- Only config: `VITE_API_BASE_URL=http://localhost:8000` (`.env.example` tracked, `.env.local` git-ignored).
+  No Firebase config, VAPID key, service worker, or notification permission.
+- **Admin key:** entered on a "Connect to Backend" screen, verified via `GET /api/admin/status`, held only in
+  React memory (no localStorage/sessionStorage/URL/console, no `VITE_ADMIN_API_KEY`). **Refreshing the page or
+  closing the tab clears it; the key must be re-entered.** Disconnect clears the key, devices, selection and history.
+  A 401 from any call also clears the session.
+- **Dashboard:** backend/MongoDB/Firebase-initialization status (init is not verified sending), paginated device
+  list (`GET /api/admin/devices`, page size 10, refresh, loading/empty/error states, masked suffix only, inactive
+  devices not selectable), composer (title ≤100, body ≤1000 with counters and live preview), session send history
+  (bounded to 15, in-memory).
+- **Send:** one `POST /api/admin/notifications/send` at a time; shows "Accepted by FCM" + message ID only after a valid
+  `accepted` response, never "delivered". Form content is kept on failure; no automatic retry; timeouts warn about
+  duplicate risk.
+- `src/services/api.ts`: typed client, 10 s timeout, response-shape validation, readable error mapping, no header logging.
+- **Not included:** broadcast, scheduling, uploads, analytics.
+
+### Running everything (three terminals)
+1. **FastAPI (8000)** — in `backend/`: set `GOOGLE_APPLICATION_CREDENTIALS` (PowerShell `$env:...="path"`, cmd `set ...=path`),
+   then `.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000 --reload`. MongoDB must be running.
+2. **User app (5173)** — in `apps/user-app`: `npm run dev`; click "Enable notifications" to register a token.
+3. **Admin app (5174)** — in `apps/admin-app`: `npm run dev`; connect with `ADMIN_API_KEY` from `backend/.env`.
 
 ---
 
@@ -168,6 +247,29 @@ Idempotent device token registration.
 - **Status**: `200 OK` for both initial and repeated registrations.
 - **Token Masking**: Never returns the token in the response body or logs.
 
+### `GET /api/admin/status`
+Requires header `X-Admin-Key` (401 if missing/incorrect/server key unset). Returns
+`backend`, `mongodb`, and `firebase_admin` (`state` initialized|unavailable, sanitized `reason`) plus a notice that
+initialization is not verified sending.
+
+### `GET /api/admin/devices`
+Requires header `X-Admin-Key`. Query params: `limit` (default 50, max 100), `offset` (default 0).
+Returns paginated devices sorted by `last_seen_at` descending. Full tokens are never returned, only short masked suffixes (`...suffix`). Includes `is_active` status.
+
+### `POST /api/admin/notifications/send`
+Requires header `X-Admin-Key`.
+Request body:
+```json
+{
+  "registration_id": "<24-hex MongoDB ObjectId>",
+  "title": "<1-100 chars>",
+  "body": "<1-1000 chars>"
+}
+```
+Looks up token on server from MongoDB. Validates document ID, limits, and active status.
+Dispatches push notification via Firebase Admin SDK. Returns status `"accepted"` with `message_id` and `registration_id`.
+If FCM reports the token permanently unregistered (`messaging.UnregisteredError`), returns `410 Gone`, marks the MongoDB record `is_active: false` with timestamp `unregistered_at`, and prevents further sends until re-registered.
+
 ---
 
 ## 6. Environment Variables
@@ -186,28 +288,51 @@ Idempotent device token registration.
 - `MONGODB_URI=mongodb://localhost:27017`
 - `MONGODB_DATABASE=fcm_notification_demo`
 - `MONGODB_COLLECTION=notify`
-- `CORS_ORIGINS=["http://localhost:5173"]`
+- `CORS_ORIGINS=["http://localhost:5173", "http://localhost:5174"]`
 - `MONGODB_SERVER_SELECTION_TIMEOUT_MS=3000`
+- `ADMIN_API_KEY` (random secret, generated locally into git-ignored `.env`; never a `VITE_` variable)
+- `FIREBASE_PROJECT_ID=fcm-snippet`
+- `FCM_REQUEST_TIMEOUT_SECONDS=10`
+- `GOOGLE_APPLICATION_CREDENTIALS` — **not in `.env`**; set in the backend terminal before starting uvicorn.
 
 ---
 
-## 7. Verification Results (Part 3)
+## 7. Verification Results
 
 | Check | Result |
 |---|---|
-| Backend Test Suite (`pytest -v`) | ✅ 10 tests passed in 0.17s (valid registration, idempotency, timestamps, validation, 503 simulation) |
+| Backend Test Suite (`pytest -v`) | ✅ 34 tests passed in 0.54s (registration, admin auth, status diagnostics, safe device listing, notification sending, FCM error mapping, reactivation, timeout simulation) |
 | Test DB Isolation | ✅ Verified: tests use `fcm_notification_demo_test` and clean up only test records |
-| Frontend Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
-| Frontend Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 21 files |
-| Backend Live Execution (`uvicorn`) | ✅ Connected to local MongoDB port 27017, unique index verified |
-| Backend `/health` & `/ready` Probes | ✅ Verified HTTP 200 responses |
-| CORS Preflight (`OPTIONS /api/devices/register`) | ✅ Verified HTTP 200, `Access-Control-Allow-Origin: http://localhost:5173` |
-| Browser Preview (User App) | ✅ Dashboard displays Phase 3 active, Device Registration card, 0 console errors |
+| User App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
+| User App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 21 files |
+| Admin App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
+| Admin App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 12 files |
+| Git Exclusions Verification | ✅ Verified: `git check-ignore -v` confirms `backend/.env`, `apps/user-app/.env.local`, and `apps/admin-app/.env.local` are strictly ignored |
+| API Authorization | ✅ Verified: constant-time `hmac.compare_digest` with HTTP 401 on missing, incorrect, or unconfigured key |
+| Explicit CORS Origins | ✅ Verified: backend strictly binds to `["http://localhost:5173", "http://localhost:5174"]` |
+| Safe Device Responses | ✅ Verified: FCM tokens are masked (`...suffix`), never leaked in responses or logs |
+| Missing Credential Handling | ✅ Verified: missing `GOOGLE_APPLICATION_CREDENTIALS` results in clean degraded status, never 500 crashes |
 
 ---
 
-## 8. Next Concrete Step
+## 8. Remaining Work (Future Milestones)
 
-**Admin App & Notification Sending Flow:**
-- Implement backend notification dispatch endpoint using Firebase Admin SDK with service-account credentials.
-- Scaffold `apps/admin-app` with notification composer (title, message, target device selector) and backend dispatch.
+The browser push notification demonstration is feature-complete and verified. The remaining backlog comprises separate milestone items:
+
+1. **Capacitor Android Packaging:**
+   - Initialize Capacitor in a dedicated mobile app bundle or wrap existing frontend.
+   - Configure Android platform project (`npx cap add android`).
+2. **Native Android Push Integration:**
+   - Integrate official `@capacitor/push-notifications` or Firebase native messaging plugin.
+   - Configure `google-services.json` inside the Android app module.
+3. **Android Token Registration Support:**
+   - Update backend `Platform` validation (`schemas.py`) to permit `"android"` alongside `"web"`.
+   - Wire native device token acquisition and submission to `POST /api/devices/register`.
+4. **Android Device Testing:**
+   - Physical device or Android Emulator testing with Google Play Services.
+   - Background push delivery handling when app is killed or in background.
+5. **Production Authentication & Deployment Hardening:**
+   - Replace local demo `X-Admin-Key` header with secure session/JWT or OAuth2 identity provider.
+   - Enforce HTTPS and strict secure cookies.
+   - Implement production-grade rate limiting and audit logging.
+

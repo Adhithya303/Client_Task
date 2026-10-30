@@ -19,8 +19,15 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_DATABASE: str = "fcm_notification_demo"
     MONGODB_COLLECTION: str = "notify"
-    CORS_ORIGINS: List[str] = ["http://localhost:5173"]
+    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:5174"]
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 3000
+
+    # Local-demo shared admin key (sent by clients in X-Admin-Key). Never a VITE_ variable.
+    ADMIN_API_KEY: str = ""
+    # Expected Firebase project ID; credentials for any other project are rejected.
+    FIREBASE_PROJECT_ID: str = ""
+    # Bounded provider request timeout for FCM calls (seconds)
+    FCM_REQUEST_TIMEOUT_SECONDS: int = 10
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
