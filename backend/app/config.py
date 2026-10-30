@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # Bounded provider request timeout for FCM calls (seconds)
     FCM_REQUEST_TIMEOUT_SECONDS: int = 10
 
+    # OAuth2 / JWT Admin Authentication Settings
+    JWT_SECRET_KEY: str = "insecure-local-demo-jwt-secret-key-change-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ISSUER: str = "fcm-notification-demo"
+    JWT_AUDIENCE: str = "fcm-admin-app"
+    ADMINS_COLLECTION: str = "admins"
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:

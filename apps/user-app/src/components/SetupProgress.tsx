@@ -18,7 +18,13 @@ const PHASES: PhaseInfo[] = [
     phase: 3,
     title: 'Backend Registration',
     description: 'FastAPI + MongoDB device persistence, idempotency, and live notification handling.',
-    status: 'current',
+    status: 'completed',
+  },
+  {
+    phase: 4,
+    title: 'Android & Production Hardening',
+    description: 'Capacitor native packaging, push plugin, OAuth2/JWT auth, and device unregistration.',
+    status: 'completed',
   },
 ];
 
@@ -29,7 +35,7 @@ export const SetupProgress: React.FC = () => {
         <h2 className="progress-title" id="progress-heading">
           Project Setup Progress
         </h2>
-        <span className="progress-subtext">Step 3 of 3 Active</span>
+        <span className="progress-subtext">All Phases Verified</span>
       </div>
       <div className="progress-steps">
         {PHASES.map((p) => (

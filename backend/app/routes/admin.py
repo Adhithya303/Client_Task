@@ -130,6 +130,7 @@ def send_notification(request: SendNotificationRequest) -> SendNotificationRespo
         title=request.title,
         body=request.body,
         registration_id=request.registration_id,
+        custom_data=request.data,
     )
 
     return SendNotificationResponse(

@@ -108,9 +108,16 @@ def get_firebase_status() -> Dict[str, Optional[str]]:
     }
 
 
-def send_fcm_notification(token: str, title: str, body: str, registration_id: str) -> str:
+def send_fcm_notification(
+    token: str,
+    title: str,
+    body: str,
+    registration_id: str,
+    custom_data: Optional[Dict[str, str]] = None,
+) -> str:
     """
     Sends a push notification to a registered device token using the Firebase Admin SDK.
+    Configures platform-specific payloads for Android (channel, priority, click_action) and Web.
     Returns the FCM message ID upon acceptance by FCM.
     Catches FCM-specific errors and maps them to appropriate sanitized HTTPExceptions.
     Handles permanently unregistered tokens by marking them inactive in MongoDB.
@@ -125,16 +132,44 @@ def send_fcm_notification(token: str, title: str, body: str, registration_id: st
             detail=f"Firebase Admin service is unavailable ({status_info.get('reason') or 'not_configured'}). Notification sending is not operational.",
         )
 
-    # Build notification payload compatible with foreground and background handlers
+    # Base string data payload for foreground and background handlers
+    payload_data: Dict[str, str] = {
+        "title": title,
+        "body": body,
+        "registration_id": str(registration_id),
+    }
+    if custom_data:
+        for k, v in custom_data.items():
+            if isinstance(k, str) and isinstance(v, str):
+                payload_data[k] = v
+
+    # Build dual-payload message (notification + data) with Android and Web configs
     message = messaging.Message(
         notification=messaging.Notification(
             title=title,
             body=body,
         ),
-        data={
-            "title": title,
-            "body": body,
-        },
+        data=payload_data,
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                title=title,
+                body=body,
+                channel_id="default",
+                sound="default",
+                click_action="OPEN_ACTIVITY",
+            ),
+        ),
+        webpush=messaging.WebpushConfig(
+            headers={
+                "Urgency": "high",
+            },
+            notification=messaging.WebpushNotification(
+                title=title,
+                body=body,
+                icon="/favicon.svg",
+            ),
+        ),
         token=token,
     )
 

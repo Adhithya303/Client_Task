@@ -139,9 +139,9 @@ Client_Task/
 | Backend Part 4 | Firebase Admin init (ADC), admin API key dependency, `GET /api/admin/status` | ✅ Done |
 | Backend Part 5 | Device listing (`GET /api/admin/devices`), notification dispatch (`POST /api/admin/notifications/send`), inactive tracking | ✅ Done (34 tests pass) |
 | Admin App (UI) | Admin composer UI on port 5174 (device selector, compose, send) | ✅ Done (built, verified build & lint) |
-| System Verification | Automated checks (tests, build, lint, git exclusions, CORS/auth, credential safety) | ✅ Done (All automated checks pass) |
-| Manual Demo Run | End-to-end multi-app live delivery demonstration | ⏳ Pending manual operator run (see `docs/DEMO_CHECKLIST.md`) |
-| Android Packaging | Capacitor integration, native push plugin, Android Firebase app, native token registration | ⏳ Separate milestone |
+| Android Integration | Capacitor 8 packaging, native push notifications, Android payload config, unregister API | ✅ Done (verified) |
+| Production Hardening | OAuth2/JWT auth, bcrypt password hashing, CLI provisioning, token unregistration | ✅ Done (43 tests pass) |
+| Manual Demo Run | End-to-end multi-app live delivery demonstration | ⏳ Ready for manual operator run (see `docs/DEMO_CHECKLIST.md`) |
 
 ---
 
@@ -301,38 +301,49 @@ If FCM reports the token permanently unregistered (`messaging.UnregisteredError`
 
 | Check | Result |
 |---|---|
-| Backend Test Suite (`pytest -v`) | ✅ 34 tests passed in 0.54s (registration, admin auth, status diagnostics, safe device listing, notification sending, FCM error mapping, reactivation, timeout simulation) |
+| Backend Test Suite (`pytest -v`) | ✅ 43 tests passed in 2.47s (device registration, web & android platforms, unregistration, admin auth, OAuth2/JWT verification, bcrypt hashing, safe device listing, notification sending, FCM error mapping, reactivation, timeout simulation) |
 | Test DB Isolation | ✅ Verified: tests use `fcm_notification_demo_test` and clean up only test records |
 | User App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
-| User App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 21 files |
+| User App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 23 files |
+| User App Android Sync (`cap:build`) | ✅ Verified: Capacitor 8 Android project synchronized in 0.136s |
 | Admin App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
 | Admin App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 12 files |
-| Git Exclusions Verification | ✅ Verified: `git check-ignore -v` confirms `backend/.env`, `apps/user-app/.env.local`, and `apps/admin-app/.env.local` are strictly ignored |
-| API Authorization | ✅ Verified: constant-time `hmac.compare_digest` with HTTP 401 on missing, incorrect, or unconfigured key |
+| Git Exclusions Verification | ✅ Verified: `git check-ignore -v` confirms `backend/.env`, keystores, and credentials are strictly ignored |
+| API Authorization & JWT | ✅ Verified: OAuth2 password flow with signed JWT (exp, iss, aud) and bcrypt hashing; X-Admin-Key supported for backward compatibility |
 | Explicit CORS Origins | ✅ Verified: backend strictly binds to `["http://localhost:5173", "http://localhost:5174"]` |
 | Safe Device Responses | ✅ Verified: FCM tokens are masked (`...suffix`), never leaked in responses or logs |
 | Missing Credential Handling | ✅ Verified: missing `GOOGLE_APPLICATION_CREDENTIALS` results in clean degraded status, never 500 crashes |
 
 ---
 
-## 8. Remaining Work (Future Milestones)
-
-The browser push notification demonstration is feature-complete and verified. The remaining backlog comprises separate milestone items:
+## 8. Android & Production Hardening Summary
 
 1. **Capacitor Android Packaging:**
-   - Initialize Capacitor in a dedicated mobile app bundle or wrap existing frontend.
-   - Configure Android platform project (`npx cap add android`).
-2. **Native Android Push Integration:**
-   - Integrate official `@capacitor/push-notifications` or Firebase native messaging plugin.
-   - Configure `google-services.json` inside the Android app module.
-3. **Android Token Registration Support:**
-   - Update backend `Platform` validation (`schemas.py`) to permit `"android"` alongside `"web"`.
-   - Wire native device token acquisition and submission to `POST /api/devices/register`.
-4. **Android Device Testing:**
-   - Physical device or Android Emulator testing with Google Play Services.
-   - Background push delivery handling when app is killed or in background.
-5. **Production Authentication & Deployment Hardening:**
-   - Replace local demo `X-Admin-Key` header with secure session/JWT or OAuth2 identity provider.
-   - Enforce HTTPS and strict secure cookies.
-   - Implement production-grade rate limiting and audit logging.
+   - Package ID: `com.fcm.notificationdemo` (configured in `capacitor.config.ts` and `AndroidManifest.xml`).
+   - Official plugin: `@capacitor/push-notifications` (v8.1.3).
+   - Gradle Google Services plugin wired in `android/build.gradle` and `android/app/build.gradle`.
+   - Android notification channel `default` created with high importance and lockscreen visibility.
+   - Convenient scripts in `apps/user-app/package.json`: `cap:build`, `cap:open`, `cap:sync`.
+
+2. **Native Push Integration:**
+   - Platform-aware `src/services/nativePush.ts` service:
+     - On browser: executes modular web Firebase SDK and service worker.
+     - On native Android: executes Capacitor native push plugin; suppresses browser service-worker initialization to avoid conflicts.
+     - Android 13+ runtime notification permissions (`POST_NOTIFICATIONS`) requested during user gesture.
+     - Automatic backend synchronization for native FCM tokens under `platform: "android"`.
+     - In-app notification inbox integration for foreground messages; system tray integration for background messages.
+     - Safe notification tap handling validating navigation targets without arbitrary URL execution.
+
+3. **Backend Registration & Payloads:**
+   - Backend accepts `platform: "android"` and `platform: "web"`.
+   - Added `POST /api/devices/unregister` to mark tokens inactive upon logout or notification disablement.
+   - Enhanced `send_fcm_notification` with `AndroidConfig` (`channel_id="default"`, `priority="high"`, `click_action="OPEN_ACTIVITY"`) and optional string-valued custom data payloads.
+
+4. **Production Authentication & Security:**
+   - OAuth2 Password Grant endpoint: `POST /api/auth/token`.
+   - Generates signed JWTs (HS256) verifying `exp` (60m), `iat`, `iss`, and `aud`.
+   - Secure password hashing using `bcrypt` (12 rounds) with random salts.
+   - CLI provisioning tool (`python -m app.cli create-admin`) ensures no public endpoint can create administrative accounts.
+   - Maintained backward compatibility with `X-Admin-Key` header for automated testing and CLI administration.
+
 

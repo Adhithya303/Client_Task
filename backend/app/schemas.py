@@ -1,6 +1,6 @@
 from datetime import datetime
 import re
-from typing import List, Literal
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -13,9 +13,9 @@ class DeviceRegisterRequest(BaseModel):
         max_length=500,
         description="FCM device registration token",
     )
-    platform: Literal["web"] = Field(
+    platform: Literal["web", "android"] = Field(
         "web",
-        description="Client device platform (must be 'web' in this phase)",
+        description="Client device platform ('web' or 'android')",
     )
 
     @field_validator("token")
@@ -37,6 +37,33 @@ class DeviceRegisterResponse(BaseModel):
     registration_id: str
 
 
+class DeviceUnregisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="FCM device registration token to unregister",
+    )
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("Token cannot be empty or whitespace only")
+        if re.search(r"\s", v):
+            raise ValueError("Token must not contain whitespace characters")
+        return v
+
+
+class DeviceUnregisterResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["unregistered"] = "unregistered"
+
+
 class DeviceItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,7 +73,7 @@ class DeviceItem(BaseModel):
     )
     platform: str = Field(
         ...,
-        description="Client device platform",
+        description="Client device platform ('web' or 'android')",
     )
     token_suffix: str = Field(
         ...,
@@ -108,6 +135,10 @@ class SendNotificationRequest(BaseModel):
         max_length=1000,
         description="Notification body text (1 to 1000 characters)",
     )
+    data: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional custom string key-value data payload for device handlers",
+    )
 
     @field_validator("title")
     @classmethod
@@ -125,6 +156,15 @@ class SendNotificationRequest(BaseModel):
             raise ValueError("body cannot be empty or whitespace only")
         return trimmed
 
+    @field_validator("data")
+    @classmethod
+    def validate_data(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        if v is not None:
+            for key, val in v.items():
+                if not isinstance(key, str) or not isinstance(val, str):
+                    raise ValueError("All keys and values in data payload must be strings")
+        return v
+
 
 class SendNotificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -138,3 +178,28 @@ class SendNotificationResponse(BaseModel):
         ...,
         description="Target device MongoDB document ID",
     )
+
+
+# --- OAuth2 / JWT Admin Authentication Schemas ---
+
+class AdminLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    username: str
+
+
+class AdminUserResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str
+    created_at: datetime

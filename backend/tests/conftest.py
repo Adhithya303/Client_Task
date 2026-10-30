@@ -13,7 +13,7 @@ settings.MONGODB_DATABASE = TEST_DB_NAME
 settings.MONGODB_COLLECTION = "notify_test"
 
 from app.main import app
-from app.database import init_database, close_database, get_notify_collection
+from app.database import init_database, close_database, get_notify_collection, get_admins_collection, get_mongo_client
 
 
 @pytest.fixture(scope="session")
@@ -22,13 +22,21 @@ def client():
         yield test_client
 
 
+@pytest.fixture
+def test_db(client):
+    db_client = get_mongo_client()
+    return db_client[settings.MONGODB_DATABASE]
+
+
 @pytest.fixture(autouse=True)
 def clean_test_collection():
     """Ensure test collection only contains isolated test tokens and cleanup after test."""
     yield
     try:
         col = get_notify_collection()
-        # Clean only documents created in the test collection
-        col.delete_many({"platform": "web"})
+        col.delete_many({"platform": {"$in": ["web", "android"]}})
+        admins_col = get_admins_collection()
+        admins_col.delete_many({"username": {"$regex": "^(cli_|jwt_)"}})
     except Exception:
         pass
+

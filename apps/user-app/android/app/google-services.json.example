@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "581317197767",
+    "project_id": "fcm-snippet",
+    "storage_bucket": "fcm-snippet.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:581317197767:android:example_app_id",
+        "android_client_info": {
+          "package_name": "com.fcm.notificationdemo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "YOUR_ANDROID_API_KEY_HERE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

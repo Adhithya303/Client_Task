@@ -88,17 +88,61 @@ async function parseErrorResponse(response: Response): Promise<string> {
   }
 }
 
+function getAuthHeaders(tokenOrKey: string): Record<string, string> {
+  const isJwt = tokenOrKey.startsWith('eyJ') || tokenOrKey.split('.').length === 3
+  if (isJwt) {
+    return {
+      Authorization: `Bearer ${tokenOrKey}`,
+    }
+  }
+  return {
+    Authorization: `Bearer ${tokenOrKey}`,
+    'X-Admin-Key': tokenOrKey,
+  }
+}
+
 /**
- * Verifies admin key by requesting GET /api/admin/status.
+ * Authenticates with username and password using OAuth2 Password Grant, returning JWT.
+ */
+export async function loginWithCredentials(
+  username: string,
+  password: string
+): Promise<string> {
+  const url = `${getBaseUrl()}/api/auth/token`
+
+  const response = await requestWithTimeout(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ username, password }),
+  })
+
+  if (!response.ok) {
+    const detail = await parseErrorResponse(response)
+    throw new ApiError(detail, response.status, response.status === 401)
+  }
+
+  const data = await response.json()
+  if (!data || typeof data.access_token !== 'string') {
+    throw new ApiError('Invalid response received from authentication endpoint.')
+  }
+
+  return data.access_token
+}
+
+/**
+ * Verifies admin key or JWT by requesting GET /api/admin/status.
  * Returns the parsed status or throws ApiError.
  */
-export async function verifyAdminKey(adminKey: string): Promise<AdminStatus> {
+export async function verifyAdminKey(adminTokenOrKey: string): Promise<AdminStatus> {
   const url = `${getBaseUrl()}/api/admin/status`
 
   const response = await requestWithTimeout(url, {
     method: 'GET',
     headers: {
-      'X-Admin-Key': adminKey,
+      ...getAuthHeaders(adminTokenOrKey),
       Accept: 'application/json',
     },
   })
@@ -120,7 +164,7 @@ export async function verifyAdminKey(adminKey: string): Promise<AdminStatus> {
  * Fetches paginated devices list via GET /api/admin/devices.
  */
 export async function fetchDevices(
-  adminKey: string,
+  adminTokenOrKey: string,
   limit = 50,
   offset = 0
 ): Promise<DeviceListResponse> {
@@ -129,7 +173,7 @@ export async function fetchDevices(
   const response = await requestWithTimeout(url, {
     method: 'GET',
     headers: {
-      'X-Admin-Key': adminKey,
+      ...getAuthHeaders(adminTokenOrKey),
       Accept: 'application/json',
     },
   })
@@ -151,7 +195,7 @@ export async function fetchDevices(
  * Sends push notification to a single registered device via POST /api/admin/notifications/send.
  */
 export async function sendNotification(
-  adminKey: string,
+  adminTokenOrKey: string,
   payload: SendNotificationRequest
 ): Promise<SendNotificationResponse> {
   const url = `${getBaseUrl()}/api/admin/notifications/send`
@@ -159,7 +203,7 @@ export async function sendNotification(
   const response = await requestWithTimeout(url, {
     method: 'POST',
     headers: {
-      'X-Admin-Key': adminKey,
+      ...getAuthHeaders(adminTokenOrKey),
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },

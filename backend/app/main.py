@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import check_database_ready, close_database, init_database
 from app.firebase import init_firebase
-from app.routes import admin, devices
+from app.routes import admin, auth, devices
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,5 +64,9 @@ def readiness_check():
 # Include device registration routes
 app.include_router(devices.router)
 
-# Admin routes (protected by the X-Admin-Key dependency)
+# Include auth routes (OAuth2 JWT tokens and user profile)
+app.include_router(auth.router)
+
+# Admin routes (protected by OAuth2 Bearer / admin key)
 app.include_router(admin.router)
+

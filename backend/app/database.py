@@ -44,9 +44,15 @@ def init_database() -> None:
         db: Database = client[settings.MONGODB_DATABASE]
         collection: Collection = db[settings.MONGODB_COLLECTION]
 
-        # Ensure unique index on token
+        # Ensure unique index on token and sorting index on last_seen_at
         collection.create_index("token", unique=True)
-        logger.info("Unique index on 'token' verified.")
+        collection.create_index([("last_seen_at", -1)])
+        logger.info("Indexes on 'notify' collection verified.")
+
+        # Ensure unique index on admin username
+        admins_collection: Collection = db[settings.ADMINS_COLLECTION]
+        admins_collection.create_index("username", unique=True)
+        logger.info("Unique index on 'admins' collection verified.")
 
         _mongo_client = client
     except (ConnectionFailure, ServerSelectionTimeoutError) as err:
@@ -64,6 +70,11 @@ def close_database() -> None:
         logger.info("Closing MongoDB connection.")
         _mongo_client.close()
         _mongo_client = None
+
+
+def is_database_initialized() -> bool:
+    """Return whether the MongoDB client is currently initialized."""
+    return _mongo_client is not None
 
 
 def check_database_ready() -> bool:
@@ -243,3 +254,109 @@ def list_devices(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service error occurred",
         ) from err
+
+
+def unregister_device_token(token: str) -> None:
+    """
+    Marks a device token inactive and records unregistered_at timestamp.
+    Used when a device logs out or disables notifications.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        collection = get_notify_collection()
+        res = collection.update_one(
+            {"token": token},
+            {
+                "$set": {
+                    "is_active": False,
+                    "unregistered_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+        if res.matched_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Device token not found.",
+            )
+    except HTTPException:
+        raise
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during unregister_device_token: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during unregister_device_token: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def get_admins_collection() -> Collection:
+    client = get_mongo_client()
+    return client[settings.MONGODB_DATABASE][settings.ADMINS_COLLECTION]
+
+
+def get_admin_user(username: str) -> Optional[dict]:
+    """Retrieve admin user document by username."""
+    try:
+        col = get_admins_collection()
+        return col.find_one({"username": username})
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during get_admin_user: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during get_admin_user: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def create_admin_user(username: str, password_hash: str) -> dict:
+    """Create a new admin user record with hashed password."""
+    now = datetime.now(timezone.utc)
+    doc = {
+        "username": username,
+        "password_hash": password_hash,
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        col = get_admins_collection()
+        res = col.insert_one(doc)
+        doc["_id"] = res.inserted_id
+        return doc
+    except DuplicateKeyError as err:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Admin username '{username}' already exists.",
+        ) from err
+    except (ConnectionFailure, ServerSelectionTimeoutError) as err:
+        logger.error("MongoDB unavailable during create_admin_user: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service currently unavailable",
+        ) from err
+    except PyMongoError as err:
+        logger.error("Database error during create_admin_user: %s", type(err).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service error occurred",
+        ) from err
+
+
+def count_admins() -> int:
+    """Return total count of provisioned admin users."""
+    try:
+        col = get_admins_collection()
+        return col.count_documents({})
+    except Exception:
+        return 0
+

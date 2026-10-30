@@ -17,7 +17,10 @@ const REQUEST_TIMEOUT_MS = 8000;
  * Send an FCM registration token to the FastAPI backend.
  * Uses AbortController to enforce a reasonable timeout and never exposes raw server errors.
  */
-export async function registerDeviceWithBackend(token: string): Promise<RegisterResult> {
+export async function registerDeviceWithBackend(
+  token: string,
+  platform: 'web' | 'android' = 'web'
+): Promise<RegisterResult> {
   const baseUrl = appConfig.apiBaseUrl.replace(/\/+$/, '');
   const url = `${baseUrl}/api/devices/register`;
 
@@ -32,7 +35,7 @@ export async function registerDeviceWithBackend(token: string): Promise<Register
       },
       body: JSON.stringify({
         token,
-        platform: 'web',
+        platform,
       }),
       signal: controller.signal,
     });
@@ -85,3 +88,61 @@ export async function registerDeviceWithBackend(token: string): Promise<Register
     };
   }
 }
+
+/**
+ * Unregister a device token from the backend (marks token inactive in MongoDB).
+ */
+export async function unregisterDeviceWithBackend(token: string): Promise<RegisterResult> {
+  const baseUrl = appConfig.apiBaseUrl.replace(/\/+$/, '');
+  const url = `${baseUrl}/api/devices/unregister`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errorMessage = `Server returned status ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData && typeof errorData.detail === 'string') {
+          errorMessage = errorData.detail;
+        }
+      } catch {
+        // Non-JSON error body
+      }
+      return { success: false, error: errorMessage };
+    }
+
+    return { success: true };
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error) {
+      if (err.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'Connection timed out while unregistering token.',
+        };
+      }
+      return {
+        success: false,
+        error: `Could not reach backend at ${baseUrl}.`,
+      };
+    }
+    return {
+      success: false,
+      error: 'An unexpected network error occurred during unregistration.',
+    };
+  }
+}
+

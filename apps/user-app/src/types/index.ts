@@ -9,7 +9,7 @@ export interface BrowserCapability {
   permissionLabel: string;
 }
 
-export type SetupPhase = 1 | 2 | 3;
+export type SetupPhase = 1 | 2 | 3 | 4;
 
 export interface PhaseInfo {
   phase: SetupPhase;

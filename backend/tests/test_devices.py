@@ -1,6 +1,7 @@
 import time
 from unittest.mock import patch
 from pymongo.errors import ServerSelectionTimeoutError
+from app.config import settings
 from app.database import get_notify_collection
 
 
@@ -96,12 +97,59 @@ def test_reject_embedded_whitespace_token(client):
     assert response.status_code == 422
 
 
+def test_valid_android_device_registration(client, test_db):
+    token = "synthetic_real_android_token_abc12345"
+    response = client.post(
+        "/api/devices/register",
+        json={"token": token, "platform": "android"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "registered"
+    assert "registration_id" in data
+
+    # Clean up test artifact
+    test_db[settings.MONGODB_COLLECTION].delete_one({"token": token})
+
+
 def test_reject_invalid_platform(client):
     response = client.post(
         "/api/devices/register",
-        json={"token": "valid_token_string_12345", "platform": "android"},
+        json={"token": "valid_token_string_12345", "platform": "ios"},
     )
     assert response.status_code == 422
+
+
+def test_device_unregistration(client, test_db):
+    token = "synthetic_token_to_unregister_99999"
+    reg_response = client.post(
+        "/api/devices/register",
+        json={"token": token, "platform": "web"},
+    )
+    assert reg_response.status_code == 200
+
+    unreg_response = client.post(
+        "/api/devices/unregister",
+        json={"token": token},
+    )
+    assert unreg_response.status_code == 200
+    assert unreg_response.json()["status"] == "unregistered"
+
+    doc = test_db[settings.MONGODB_COLLECTION].find_one({"token": token})
+    assert doc is not None
+    assert doc["is_active"] is False
+    assert "unregistered_at" in doc
+
+    # Clean up
+    test_db[settings.MONGODB_COLLECTION].delete_one({"token": token})
+
+
+def test_device_unregistration_not_found(client):
+    response = client.post(
+        "/api/devices/unregister",
+        json={"token": "non_existent_token_12345678"},
+    )
+    assert response.status_code == 404
 
 
 def test_reject_unexpected_fields(client):

@@ -22,6 +22,9 @@ build/
 *firebase-adminsdk*.json
 *service-account*.json
 *serviceaccount*.json
+*.jks
+*.keystore
+google-services.json
 
 # Logs
 *.log

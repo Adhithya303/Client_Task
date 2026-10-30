@@ -106,7 +106,7 @@ def test_safe_device_listing_without_token_exposure(client, admin_key):
 
     for item in data["devices"]:
         assert "registration_id" in item
-        assert item["platform"] == "web"
+        assert item["platform"] in ["web", "android"]
         assert item["is_active"] is True
         assert "created_at" in item
         assert "last_seen_at" in item
