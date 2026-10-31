@@ -157,7 +157,6 @@ def send_fcm_notification(
                 body=body,
                 channel_id="default",
                 sound="default",
-                click_action="OPEN_ACTIVITY",
             ),
         ),
         webpush=messaging.WebpushConfig(
@@ -231,13 +230,40 @@ def send_fcm_notification(
             detail="FCM sender ID mismatch for the target device token.",
         ) from err
     except exceptions.InvalidArgumentError as err:
+        err_msg = str(err).lower()
+        is_token_error = "token" in err_msg and any(
+            phrase in err_msg
+            for phrase in [
+                "registration token",
+                "invalid registration",
+                "not a valid fcm registration token",
+                "malformed",
+                "message.token",
+                "the value of 'token'",
+            ]
+        )
+        if is_token_error:
+            logger.warning(
+                "FCM registration token is permanently invalid for registration_id=%s: %s; marking inactive.",
+                registration_id,
+                err,
+            )
+            from app.database import mark_device_inactive
+            mark_device_inactive(registration_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The device registration token has an invalid format and has been marked inactive.",
+            ) from err
+
+        # Message payload validation error: preserve device token in active state
         logger.warning(
-            "Invalid argument error during FCM send for registration_id=%s",
+            "FCM notification payload rejected as invalid for registration_id=%s: %s",
             registration_id,
+            err,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="FCM notification payload or target token was rejected as invalid.",
+            detail="FCM notification payload was rejected as invalid.",
         ) from err
     except exceptions.FirebaseError as err:
         logger.error(

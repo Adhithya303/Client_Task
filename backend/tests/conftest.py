@@ -28,6 +28,19 @@ def test_db(client):
     return db_client[settings.MONGODB_DATABASE]
 
 
+from app.auth import create_access_token
+
+
+@pytest.fixture
+def admin_token():
+    return create_access_token("admin_test_user")
+
+
+@pytest.fixture
+def admin_auth_headers(admin_token):
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
 @pytest.fixture(autouse=True)
 def clean_test_collection():
     """Ensure test collection only contains isolated test tokens and cleanup after test."""
@@ -39,4 +52,5 @@ def clean_test_collection():
         admins_col.delete_many({"username": {"$regex": "^(cli_|jwt_)"}})
     except Exception:
         pass
+
 

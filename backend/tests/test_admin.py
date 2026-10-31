@@ -22,57 +22,49 @@ def admin_key(monkeypatch):
     return TEST_KEY
 
 
-# ---------------------------------------------------------------- admin key
+# ---------------------------------------------------------------- admin authentication
 
 
-def test_missing_admin_key_rejected(client, admin_key):
+def test_missing_authorization_header_rejected(client):
     assert client.get(STATUS_URL).status_code == 401
 
 
-def test_incorrect_admin_key_rejected(client, admin_key):
-    r = client.get(STATUS_URL, headers={"X-Admin-Key": "wrong"})
-    assert r.status_code == 401
-    assert TEST_KEY not in r.text
-
-
-def test_non_ascii_admin_key_rejected_not_500(client, admin_key):
-    r = client.get(STATUS_URL, headers={"X-Admin-Key": "kéy".encode("latin-1")})
-    assert r.status_code == 401
-
-
-def test_server_key_not_configured_denies_everything(client, monkeypatch):
-    monkeypatch.setattr(settings, "ADMIN_API_KEY", "")
-    assert client.get(STATUS_URL).status_code == 401
-    # An empty header must not match an empty server key either.
-    assert client.get(STATUS_URL, headers={"X-Admin-Key": ""}).status_code == 401
-
-
-def test_correct_admin_key_allowed(client, admin_key):
+def test_legacy_x_admin_key_header_rejected(client):
+    """Verify that legacy X-Admin-Key header alone is rejected with 401 (fallback removed)."""
     r = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY})
+    assert r.status_code == 401
+
+
+def test_incorrect_bearer_token_rejected(client):
+    r = client.get(STATUS_URL, headers={"Authorization": "Bearer not-a-valid-token"})
+    assert r.status_code == 401
+
+
+def test_correct_bearer_token_allowed(client, admin_auth_headers):
+    r = client.get(STATUS_URL, headers=admin_auth_headers)
     assert r.status_code == 200
     body = r.json()
     assert body["backend"] == "reachable"
     assert body["mongodb"] == "reachable"
-    assert TEST_KEY not in r.text
 
 
 # ---------------------------------------------------------------- firebase status
 
 
-def test_status_unavailable_when_project_id_missing(client, admin_key, monkeypatch):
+def test_status_unavailable_when_project_id_missing(client, admin_auth_headers, monkeypatch):
     monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "")
     fb.init_firebase()
-    body = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY}).json()
+    body = client.get(STATUS_URL, headers=admin_auth_headers).json()
     assert body["firebase_admin"]["state"] == "unavailable"
     assert body["firebase_admin"]["reason"] == "project_id_not_configured"
     assert "no notification has been sent" in body["notice"]
 
 
-def test_status_unavailable_when_credentials_missing(client, admin_key, monkeypatch):
+def test_status_unavailable_when_credentials_missing(client, admin_auth_headers, monkeypatch):
     monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "fcm-snippet")
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     fb.init_firebase()
-    body = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY}).json()
+    body = client.get(STATUS_URL, headers=admin_auth_headers).json()
     assert body["firebase_admin"]["state"] == "unavailable"
     assert body["firebase_admin"]["reason"] == "credentials_not_configured"
 
@@ -97,14 +89,14 @@ def _mock_firebase(monkeypatch, credential_project, init_calls):
     monkeypatch.setattr(fb.firebase_admin, "initialize_app", fake_initialize_app)
 
 
-def test_status_initialized_with_mocked_firebase(client, admin_key, monkeypatch):
+def test_status_initialized_with_mocked_firebase(client, admin_auth_headers, monkeypatch):
     calls = []
     _mock_firebase(monkeypatch, "fcm-snippet", calls)
     fb.init_firebase()
     fb.init_firebase()  # second call must reuse, not re-initialize
     assert calls == [{"projectId": "fcm-snippet", "httpTimeout": 10}]
 
-    r = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY})
+    r = client.get(STATUS_URL, headers=admin_auth_headers)
     body = r.json()
     assert body["firebase_admin"]["state"] == "initialized"
     assert body["firebase_admin"]["reason"] is None
@@ -112,18 +104,18 @@ def test_status_initialized_with_mocked_firebase(client, admin_key, monkeypatch)
     assert "does not verify permission to send" in body["notice"]
 
 
-def test_project_id_mismatch_detected(client, admin_key, monkeypatch):
+def test_project_id_mismatch_detected(client, admin_auth_headers, monkeypatch):
     calls = []
     _mock_firebase(monkeypatch, "some-other-project", calls)
     fb.init_firebase()
     assert calls == []
-    body = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY}).json()
+    body = client.get(STATUS_URL, headers=admin_auth_headers).json()
     assert body["firebase_admin"]["state"] == "unavailable"
     assert body["firebase_admin"]["reason"] == "project_id_mismatch"
     assert "some-other-project" not in str(body)
 
 
-def test_credential_load_error_is_sanitized(client, admin_key, monkeypatch):
+def test_credential_load_error_is_sanitized(client, admin_auth_headers, monkeypatch):
     monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "fcm-snippet")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "C:/secret/path.json")
 
@@ -134,7 +126,7 @@ def test_credential_load_error_is_sanitized(client, admin_key, monkeypatch):
 
     monkeypatch.setattr(fb.credentials, "ApplicationDefault", lambda: Boom())
     fb.init_firebase()
-    r = client.get(STATUS_URL, headers={"X-Admin-Key": TEST_KEY})
+    r = client.get(STATUS_URL, headers=admin_auth_headers)
     assert r.json()["firebase_admin"]["reason"] == "credentials_invalid"
     assert "secret" not in r.text
 

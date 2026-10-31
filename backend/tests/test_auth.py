@@ -110,3 +110,25 @@ def test_cli_admin_provisioning(test_db):
 
     # Clean up
     test_db["admins"].delete_one({"username": username})
+
+
+def test_login_rate_limiting(client):
+    target_user = "rate_limited_test_user"
+
+    # Send 5 failed login attempts
+    for _ in range(5):
+        resp = client.post(
+            "/api/auth/token",
+            json={"username": target_user, "password": "WrongPassword!"},
+        )
+        assert resp.status_code in [401, 429]
+
+    # The 6th attempt within the 60s window must be rejected with 429 Too Many Requests
+    blocked_resp = client.post(
+        "/api/auth/token",
+        json={"username": target_user, "password": "WrongPassword!"},
+    )
+    assert blocked_resp.status_code == 429
+    assert "Too many failed login attempts" in blocked_resp.json()["detail"]
+    assert blocked_resp.headers.get("Retry-After") == "60"
+

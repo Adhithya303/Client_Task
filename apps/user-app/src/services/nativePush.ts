@@ -19,6 +19,22 @@ export function isNativeAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 }
 
+/**
+ * Checks current push notification permission status on native platforms.
+ */
+export async function checkNativePushPermission(): Promise<'granted' | 'denied' | 'default'> {
+  if (!isNativePlatform()) return 'default';
+  try {
+    const status = await PushNotifications.checkPermissions();
+    if (status.receive === 'granted') return 'granted';
+    if (status.receive === 'denied') return 'denied';
+    return 'default';
+  } catch (err) {
+    console.warn('[nativePush] Error checking permissions:', err);
+    return 'default';
+  }
+}
+
 export interface NativePushCallbacks {
   onToken: (token: string) => void;
   onError: (errorMessage: string) => void;

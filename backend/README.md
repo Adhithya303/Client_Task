@@ -89,11 +89,17 @@ python -m app.cli create-admin --username admin --password "MySuperSecretPasswor
 From `backend/`:
 
 ```powershell
+# For local browser / web testing:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# For Android Emulator or Physical Device testing across local Wi-Fi:
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The server binds to `127.0.0.1:8000`:
-- **API Base**: `http://127.0.0.1:8000`
+The server binds to port `8000`:
+- **Local Browser Base**: `http://127.0.0.1:8000`
+- **Android Emulator Loopback**: `http://10.0.2.2:8000` (maps to host's `127.0.0.1:8000`)
+- **Physical Device on LAN**: `http://<YOUR_LAN_IP>:8000`
 - **Interactive OpenAPI Docs**: `http://127.0.0.1:8000/docs`
 - **Alternative ReDoc**: `http://127.0.0.1:8000/redoc`
 
@@ -147,7 +153,7 @@ Marks a device token inactive when a device logs out or disables notifications.
 ### Authentication Endpoints
 
 #### `POST /api/auth/token`
-OAuth2 Password Grant / JWT access token endpoint.
+OAuth2 Password Grant / JWT access token endpoint. Rate limited to 5 attempts per minute per IP and username (returns `429 Too Many Requests` if exceeded).
 - **Request Body**:
   ```json
   {
@@ -166,11 +172,11 @@ OAuth2 Password Grant / JWT access token endpoint.
   ```
 
 #### `GET /api/auth/me`
-Protected by `Authorization: Bearer <token>` or `X-Admin-Key`. Returns current user profile.
+Protected strictly by `Authorization: Bearer <token>`. Returns current user profile.
 
 ---
 
-### Admin Endpoints (Protected by Bearer Token or X-Admin-Key)
+### Admin Endpoints (Protected by `Authorization: Bearer <token>`)
 
 #### `GET /api/admin/status`
 Returns backend, MongoDB, and Firebase Admin initialization status without exposing credentials or internal paths.
@@ -193,6 +199,7 @@ Dispatches a push notification to the target device via Firebase Admin SDK.
   }
   ```
 - Configures dual payload (Notification + Data) with high-priority Android channel `default` and Web push configuration.
+- Distinguishes malformed message payloads (preserving active token status) from invalid token syntax (deactivating token).
 - If FCM reports the token permanently unregistered (`UnregisteredError`), automatically marks the device inactive in MongoDB and returns HTTP 410 Gone.
 
 ---
@@ -205,4 +212,4 @@ From `backend/`:
 .\.venv\Scripts\pytest.exe -v
 ```
 
-All 43 unit and integration tests run against an isolated database (`fcm_notification_demo_test`) and clean up test records automatically.
+All 46 unit and integration tests run against an isolated database (`fcm_notification_demo_test`) and clean up test records automatically.

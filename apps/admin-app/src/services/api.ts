@@ -72,11 +72,13 @@ async function parseErrorResponse(response: Response): Promise<string> {
     case 400:
       return 'Bad request. Please check input parameters or device status.'
     case 401:
-      return 'Admin access denied: invalid or missing admin API key.'
+      return 'Admin session expired or access denied: valid OAuth2 Bearer token required.'
     case 404:
       return 'Device or endpoint not found.'
     case 410:
       return 'Device token is permanently unregistered with FCM and has been marked inactive.'
+    case 429:
+      return 'Too many login attempts. Please wait 60 seconds before trying again.'
     case 502:
       return 'Firebase authentication or provider dispatch error.'
     case 503:
@@ -88,16 +90,9 @@ async function parseErrorResponse(response: Response): Promise<string> {
   }
 }
 
-function getAuthHeaders(tokenOrKey: string): Record<string, string> {
-  const isJwt = tokenOrKey.startsWith('eyJ') || tokenOrKey.split('.').length === 3
-  if (isJwt) {
-    return {
-      Authorization: `Bearer ${tokenOrKey}`,
-    }
-  }
+function getAuthHeaders(token: string): Record<string, string> {
   return {
-    Authorization: `Bearer ${tokenOrKey}`,
-    'X-Admin-Key': tokenOrKey,
+    Authorization: `Bearer ${token.trim()}`,
   }
 }
 

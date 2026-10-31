@@ -1,6 +1,8 @@
+from collections import defaultdict
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from threading import Lock
+import time
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.auth import (
     create_access_token,
@@ -15,32 +17,89 @@ logger = logging.getLogger("backend.auth_routes")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+class LoginRateLimiter:
+    """
+    Sliding window in-memory rate limiter for admin login attempts.
+    Tracks failed and total login attempts per IP and username.
+    """
+
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 60):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self._attempts = defaultdict(list)
+        self._lock = Lock()
+
+    def check_rate_limit(self, key: str) -> bool:
+        now = time.time()
+        with self._lock:
+            # Filter attempts within the active time window
+            self._attempts[key] = [
+                t for t in self._attempts[key] if now - t < self.window_seconds
+            ]
+            return len(self._attempts[key]) < self.max_attempts
+
+    def record_attempt(self, key: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._attempts[key].append(now)
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            if key in self._attempts:
+                del self._attempts[key]
+
+
+login_limiter = LoginRateLimiter(max_attempts=5, window_seconds=60)
+
+
 @router.post(
     "/token",
     response_model=TokenResponse,
     summary="Obtain admin OAuth2 JWT access token",
     description="Authenticates an admin user using credentials and returns a short-lived signed JWT bearer token.",
 )
-def login_for_access_token(request: AdminLoginRequest) -> TokenResponse:
+def login_for_access_token(
+    request: AdminLoginRequest,
+    req: Request,
+) -> TokenResponse:
     username = request.username.strip()
     password = request.password
+
+    # Determine rate limiting key based on client IP and target username
+    client_ip = req.client.host if req.client else "unknown"
+    rate_limit_key = f"{client_ip}:{username.lower()}"
+
+    if not login_limiter.check_rate_limit(rate_limit_key):
+        logger.warning(
+            "Rate limit exceeded for admin login attempt: ip=%s, user=%s",
+            client_ip,
+            username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please wait 60 seconds before trying again.",
+            headers={"Retry-After": "60"},
+        )
 
     admin_doc = get_admin_user(username)
 
     is_authenticated = False
     if admin_doc and "password_hash" in admin_doc:
         is_authenticated = verify_password(password, admin_doc["password_hash"])
-    elif settings.ADMIN_API_KEY and username.lower() == "admin" and password == settings.ADMIN_API_KEY:
-        # Fallback bootstrap: allow default admin user when configured with ADMIN_API_KEY
-        is_authenticated = True
 
     if not is_authenticated:
-        logger.warning("Failed login attempt for username: %s", username)
+        login_limiter.record_attempt(rate_limit_key)
+        logger.warning(
+            "Failed login attempt for username: %s from IP: %s", username, client_ip
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Reset rate limiting counter upon successful authentication
+    login_limiter.reset(rate_limit_key)
 
     access_token = create_access_token(username=username)
     logger.info("Admin user '%s' authenticated successfully.", username)
@@ -56,7 +115,7 @@ def login_for_access_token(request: AdminLoginRequest) -> TokenResponse:
 @router.get(
     "/me",
     summary="Get currently authenticated admin user",
-    description="Validates Bearer token or admin key and returns current user identity.",
+    description="Validates Bearer token and returns current user identity.",
 )
 def get_current_user_profile(
     current_user: str = Depends(get_current_admin),

@@ -49,15 +49,18 @@ def _setup_initialized_firebase(monkeypatch):
 # ---------------------------------------------------------------- unauthorized tests
 
 
-def test_devices_list_unauthorized(client, admin_key):
+# ---------------------------------------------------------------- unauthorized tests
+
+
+def test_devices_list_unauthorized(client):
     # Missing header
     assert client.get("/api/admin/devices").status_code == 401
-    # Wrong header
+    # Wrong / legacy header rejected
     r = client.get("/api/admin/devices", headers={"X-Admin-Key": "wrong-key"})
     assert r.status_code == 401
 
 
-def test_send_notification_unauthorized(client, admin_key):
+def test_send_notification_unauthorized(client):
     payload = {
         "registration_id": "507f1f77bcf86cd799439011",
         "title": "Title",
@@ -65,7 +68,7 @@ def test_send_notification_unauthorized(client, admin_key):
     }
     # Missing header
     assert client.post("/api/admin/notifications/send", json=payload).status_code == 401
-    # Wrong header
+    # Legacy header rejected
     r = client.post(
         "/api/admin/notifications/send",
         headers={"X-Admin-Key": "wrong-key"},
@@ -77,7 +80,7 @@ def test_send_notification_unauthorized(client, admin_key):
 # ---------------------------------------------------------------- device listing tests
 
 
-def test_safe_device_listing_without_token_exposure(client, admin_key):
+def test_safe_device_listing_without_token_exposure(client, admin_auth_headers):
     # Register two devices
     token_1 = "secret_real_long_fcm_token_device_one_111111"
     token_2 = "secret_real_long_fcm_token_device_two_222222"
@@ -87,7 +90,7 @@ def test_safe_device_listing_without_token_exposure(client, admin_key):
     assert r1.status_code == 200
     assert r2.status_code == 200
 
-    r = client.get("/api/admin/devices", headers={"X-Admin-Key": TEST_KEY})
+    r = client.get("/api/admin/devices", headers=admin_auth_headers)
     assert r.status_code == 200
     data = r.json()
 
@@ -112,14 +115,14 @@ def test_safe_device_listing_without_token_exposure(client, admin_key):
         assert "last_seen_at" in item
 
 
-def test_device_listing_pagination(client, admin_key):
+def test_device_listing_pagination(client, admin_auth_headers):
     for i in range(5):
         token = f"token_for_pagination_test_device_{i:03d}_suffix"
         client.post("/api/devices/register", json={"token": token, "platform": "web"})
 
     r = client.get(
         "/api/admin/devices?limit=2&offset=1",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
     )
     assert r.status_code == 200
     data = r.json()
@@ -131,10 +134,10 @@ def test_device_listing_pagination(client, admin_key):
 # ---------------------------------------------------------------- malformed and unknown ID tests
 
 
-def test_send_malformed_registration_id(client, admin_key):
+def test_send_malformed_registration_id(client, admin_auth_headers):
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": "not-a-valid-hex-id",
             "title": "Title",
@@ -145,10 +148,10 @@ def test_send_malformed_registration_id(client, admin_key):
     assert "Invalid registration_id format" in r.json()["detail"]
 
 
-def test_send_unknown_registration_id(client, admin_key):
+def test_send_unknown_registration_id(client, admin_auth_headers):
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": "507f1f77bcf86cd799439011",
             "title": "Title",
@@ -159,13 +162,13 @@ def test_send_unknown_registration_id(client, admin_key):
     assert "Device not found" in r.json()["detail"]
 
 
-def test_send_rejects_missing_whitespace_and_extra_fields(client, admin_key):
+def test_send_rejects_missing_whitespace_and_extra_fields(client, admin_auth_headers):
     valid_id = "507f1f77bcf86cd799439011"
 
     # Whitespace title
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={"registration_id": valid_id, "title": "   ", "body": "Valid body"},
     )
     assert r.status_code == 422
@@ -173,7 +176,7 @@ def test_send_rejects_missing_whitespace_and_extra_fields(client, admin_key):
     # Whitespace body
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={"registration_id": valid_id, "title": "Valid title", "body": "   "},
     )
     assert r.status_code == 422
@@ -181,7 +184,7 @@ def test_send_rejects_missing_whitespace_and_extra_fields(client, admin_key):
     # Unexpected extra field (extra="forbid")
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": valid_id,
             "title": "Title",
@@ -195,7 +198,7 @@ def test_send_rejects_missing_whitespace_and_extra_fields(client, admin_key):
 # ---------------------------------------------------------------- successful send tests
 
 
-def test_successful_notification_send(client, admin_key, monkeypatch):
+def test_successful_notification_send(client, admin_auth_headers, monkeypatch):
     _setup_initialized_firebase(monkeypatch)
 
     token = "real_stored_token_send_success_999999"
@@ -212,7 +215,7 @@ def test_successful_notification_send(client, admin_key, monkeypatch):
 
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Welcome Admin",
@@ -242,14 +245,14 @@ def test_successful_notification_send(client, admin_key, monkeypatch):
 # ---------------------------------------------------------------- failure and error handling tests
 
 
-def test_send_fails_when_firebase_not_initialized(client, admin_key):
+def test_send_fails_when_firebase_not_initialized(client, admin_auth_headers):
     token = "token_firebase_uninit_test_333333"
     reg_res = client.post("/api/devices/register", json={"token": token, "platform": "web"})
     reg_id = reg_res.json()["registration_id"]
 
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -260,7 +263,7 @@ def test_send_fails_when_firebase_not_initialized(client, admin_key):
     assert "Firebase Admin service is unavailable" in r.json()["detail"]
 
 
-def test_send_firebase_permission_denied_returns_502(client, admin_key, monkeypatch):
+def test_send_firebase_permission_denied_returns_502(client, admin_auth_headers, monkeypatch):
     _setup_initialized_firebase(monkeypatch)
 
     token = "token_firebase_perm_denied_test_444444"
@@ -274,7 +277,7 @@ def test_send_firebase_permission_denied_returns_502(client, admin_key, monkeypa
 
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -285,7 +288,7 @@ def test_send_firebase_permission_denied_returns_502(client, admin_key, monkeypa
     assert "authentication or authorization failed" in r.json()["detail"]
 
 
-def test_send_firebase_timeout_returns_504(client, admin_key, monkeypatch):
+def test_send_firebase_timeout_returns_504(client, admin_auth_headers, monkeypatch):
     _setup_initialized_firebase(monkeypatch)
 
     token = "token_firebase_timeout_test_555555"
@@ -299,7 +302,7 @@ def test_send_firebase_timeout_returns_504(client, admin_key, monkeypatch):
 
     r = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -316,11 +319,101 @@ def test_send_firebase_timeout_returns_504(client, admin_key, monkeypatch):
     assert doc["is_active"] is True
 
 
+def test_send_firebase_transient_unavailable_preserves_token(client, admin_auth_headers, monkeypatch):
+    _setup_initialized_firebase(monkeypatch)
+
+    token = "token_firebase_unavailable_test_666666"
+    reg_res = client.post("/api/devices/register", json={"token": token, "platform": "web"})
+    reg_id = reg_res.json()["registration_id"]
+
+    def fake_send(message):
+        raise exceptions.UnavailableError("FCM service temporarily unavailable")
+
+    monkeypatch.setattr(messaging, "send", fake_send)
+
+    r = client.post(
+        "/api/admin/notifications/send",
+        headers=admin_auth_headers,
+        json={
+            "registration_id": reg_id,
+            "title": "Title",
+            "body": "Body",
+        },
+    )
+    assert r.status_code == 503
+    assert "temporarily unavailable" in r.json()["detail"]
+
+    # Ensure device is NOT marked inactive for transient unavailable error
+    col = get_notify_collection()
+    doc = col.find_one({"token": token})
+    assert doc["is_active"] is True
+
+
+def test_send_firebase_invalid_argument_payload_preserves_token(client, admin_auth_headers, monkeypatch):
+    _setup_initialized_firebase(monkeypatch)
+
+    token = "token_payload_invalid_arg_777777"
+    reg_res = client.post("/api/devices/register", json={"token": token, "platform": "web"})
+    reg_id = reg_res.json()["registration_id"]
+
+    def fake_send(message):
+        raise exceptions.InvalidArgumentError("Invalid value at 'message.data' payload")
+
+    monkeypatch.setattr(messaging, "send", fake_send)
+
+    r = client.post(
+        "/api/admin/notifications/send",
+        headers=admin_auth_headers,
+        json={
+            "registration_id": reg_id,
+            "title": "Title",
+            "body": "Body",
+        },
+    )
+    assert r.status_code == 400
+    assert "payload was rejected as invalid" in r.json()["detail"]
+
+    # Crucial: Token must NOT be deactivated when it is a message payload error!
+    col = get_notify_collection()
+    doc = col.find_one({"token": token})
+    assert doc["is_active"] is True
+
+
+def test_send_firebase_invalid_argument_token_deactivates_token(client, admin_auth_headers, monkeypatch):
+    _setup_initialized_firebase(monkeypatch)
+
+    token = "token_token_invalid_arg_888888"
+    reg_res = client.post("/api/devices/register", json={"token": token, "platform": "web"})
+    reg_id = reg_res.json()["registration_id"]
+
+    def fake_send(message):
+        raise exceptions.InvalidArgumentError("The registration token is not a valid FCM registration token")
+
+    monkeypatch.setattr(messaging, "send", fake_send)
+
+    r = client.post(
+        "/api/admin/notifications/send",
+        headers=admin_auth_headers,
+        json={
+            "registration_id": reg_id,
+            "title": "Title",
+            "body": "Body",
+        },
+    )
+    assert r.status_code == 400
+    assert "invalid format and has been marked inactive" in r.json()["detail"]
+
+    # Crucial: Token IS deactivated when the token itself is malformed!
+    col = get_notify_collection()
+    doc = col.find_one({"token": token})
+    assert doc["is_active"] is False
+
+
 # ---------------------------------------------------------------- unregistered token & reactivation tests
 
 
 def test_unregistered_token_marked_inactive_and_reactivated_on_reregister(
-    client, admin_key, monkeypatch
+    client, admin_auth_headers, monkeypatch
 ):
     _setup_initialized_firebase(monkeypatch)
 
@@ -336,7 +429,7 @@ def test_unregistered_token_marked_inactive_and_reactivated_on_reregister(
 
     r1 = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -356,7 +449,7 @@ def test_unregistered_token_marked_inactive_and_reactivated_on_reregister(
     # 3. Subsequent send to this inactive device is blocked
     r2 = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -384,7 +477,7 @@ def test_unregistered_token_marked_inactive_and_reactivated_on_reregister(
 
     r4 = client.post(
         "/api/admin/notifications/send",
-        headers={"X-Admin-Key": TEST_KEY},
+        headers=admin_auth_headers,
         json={
             "registration_id": reg_id,
             "title": "Title",
@@ -398,20 +491,20 @@ def test_unregistered_token_marked_inactive_and_reactivated_on_reregister(
 # ---------------------------------------------------------------- database unavailable tests
 
 
-def test_database_unavailable_handling_for_devices_and_send(client, admin_key):
+def test_database_unavailable_handling_for_devices_and_send(client, admin_auth_headers):
     with patch(
         "app.database.get_notify_collection",
         side_effect=ServerSelectionTimeoutError("Simulated DB down"),
     ):
         # Listing devices returns 503
-        r_list = client.get("/api/admin/devices", headers={"X-Admin-Key": TEST_KEY})
+        r_list = client.get("/api/admin/devices", headers=admin_auth_headers)
         assert r_list.status_code == 503
         assert "currently unavailable" in r_list.json()["detail"]
 
         # Sending notification returns 503
         r_send = client.post(
             "/api/admin/notifications/send",
-            headers={"X-Admin-Key": TEST_KEY},
+            headers=admin_auth_headers,
             json={
                 "registration_id": "507f1f77bcf86cd799439011",
                 "title": "Title",

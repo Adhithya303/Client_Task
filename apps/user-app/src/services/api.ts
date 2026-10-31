@@ -12,81 +12,103 @@ export interface RegisterResult {
 }
 
 const REQUEST_TIMEOUT_MS = 8000;
+const MAX_REGISTRATION_RETRIES = 2;
+
+async function waitDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Send an FCM registration token to the FastAPI backend.
- * Uses AbortController to enforce a reasonable timeout and never exposes raw server errors.
+ * Uses AbortController to enforce a reasonable timeout and includes automatic retry
+ * for transient network or backend connection issues.
  */
 export async function registerDeviceWithBackend(
   token: string,
-  platform: 'web' | 'android' = 'web'
+  platform: 'web' | 'android' = 'web',
+  maxRetries: number = MAX_REGISTRATION_RETRIES
 ): Promise<RegisterResult> {
   const baseUrl = appConfig.apiBaseUrl.replace(/\/+$/, '');
   const url = `${baseUrl}/api/devices/register`;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let lastError = 'Failed to register token with backend.';
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        token,
-        platform,
-      }),
-      signal: controller.signal,
-    });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    clearTimeout(timeoutId);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token,
+          platform,
+        }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      let errorMessage = `Server returned status ${response.status}`;
-      try {
-        const errorData = await response.json();
-        if (errorData && typeof errorData.detail === 'string') {
-          errorMessage = errorData.detail;
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        let errorMessage = `Server returned status ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData && typeof errorData.detail === 'string') {
+            errorMessage = errorData.detail;
+          }
+        } catch {
+          // Non-JSON error body (e.g. proxy or 502/503 HTML)
         }
-      } catch {
-        // Non-JSON error body (e.g. proxy or 502/503 HTML)
+
+        // Retry only on server error 502/503/504
+        if (response.status >= 500 && attempt < maxRetries) {
+          lastError = errorMessage;
+          await waitDelay(1000 * (attempt + 1));
+          continue;
+        }
+
+        return { success: false, error: errorMessage };
       }
-      return { success: false, error: errorMessage };
-    }
 
-    const data = (await response.json()) as DeviceRegisterApiResponse;
+      const data = (await response.json()) as DeviceRegisterApiResponse;
 
-    if (data.status === 'registered' && typeof data.registration_id === 'string') {
-      return {
-        success: true,
-        registrationId: data.registration_id,
-      };
-    }
-
-    return {
-      success: false,
-      error: 'Backend response did not match expected registration contract.',
-    };
-  } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    if (err instanceof Error) {
-      if (err.name === 'AbortError') {
+      if (data.status === 'registered' && typeof data.registration_id === 'string') {
         return {
-          success: false,
-          error: 'Connection timed out while reaching backend. Please verify FastAPI is running.',
+          success: true,
+          registrationId: data.registration_id,
         };
       }
+
       return {
         success: false,
-        error: `Could not connect to backend at ${baseUrl}. Ensure FastAPI is started.`,
+        error: 'Backend response did not match expected registration contract.',
       };
+    } catch (err: unknown) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          lastError = 'Connection timed out while reaching backend. Please verify FastAPI is running.';
+        } else {
+          lastError = `Could not connect to backend at ${baseUrl}. Ensure FastAPI is started.`;
+        }
+      } else {
+        lastError = 'An unexpected network error occurred.';
+      }
+
+      if (attempt < maxRetries) {
+        await waitDelay(1000 * (attempt + 1));
+        continue;
+      }
     }
-    return {
-      success: false,
-      error: 'An unexpected network error occurred.',
-    };
   }
+
+  return {
+    success: false,
+    error: lastError,
+  };
 }
 
 /**

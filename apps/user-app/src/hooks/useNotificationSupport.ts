@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { BrowserCapability, PermissionState } from '../types';
+import { isNativeAndroid, checkNativePushPermission } from '../services/nativePush.ts';
 
 export function getPermissionLabel(permission: PermissionState): string {
   switch (permission) {
@@ -17,6 +18,17 @@ export function getPermissionLabel(permission: PermissionState): string {
 
 export function useNotificationSupport(): BrowserCapability {
   const evaluateCapabilities = useCallback((): BrowserCapability => {
+    if (isNativeAndroid()) {
+      return {
+        hasNotificationApi: true,
+        hasServiceWorker: true,
+        isSecureContext: true,
+        isFullyCapable: true,
+        permission: 'default',
+        permissionLabel: getPermissionLabel('default'),
+      };
+    }
+
     const hasNotificationApi = typeof window !== 'undefined' && 'Notification' in window;
     const hasServiceWorker = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
     const isSecureContext = typeof window !== 'undefined' && Boolean(window.isSecureContext);
@@ -41,9 +53,23 @@ export function useNotificationSupport(): BrowserCapability {
   const [capabilities, setCapabilities] = useState<BrowserCapability>(evaluateCapabilities);
 
   useEffect(() => {
-    const update = () => {
-      setCapabilities(evaluateCapabilities());
+    const update = async () => {
+      if (isNativeAndroid()) {
+        const nativePerm = await checkNativePushPermission();
+        setCapabilities({
+          hasNotificationApi: true,
+          hasServiceWorker: true,
+          isSecureContext: true,
+          isFullyCapable: true,
+          permission: nativePerm,
+          permissionLabel: getPermissionLabel(nativePerm),
+        });
+      } else {
+        setCapabilities(evaluateCapabilities());
+      }
     };
+
+    update();
 
     // Re-check when window regains focus (e.g. user updated site settings in browser chrome)
     window.addEventListener('focus', update);

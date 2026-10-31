@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: fcm-mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_DATABASE: fcm_notification_demo
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - fcm-internal
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: fcm-backend
+    restart: always
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_DATABASE=fcm_notification_demo
+      - MONGODB_COLLECTION=notify
+      - CORS_ORIGINS=["https://localhost","https://127.0.0.1","capacitor://localhost"]
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in production}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:?FIREBASE_PROJECT_ID must be set}
+      - GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/firebase-credentials.json
+    volumes:
+      - ${FIREBASE_CREDENTIALS_FILE:-../backend/service-account.json}:/etc/secrets/firebase-credentials.json:ro
+    depends_on:
+      - mongodb
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--workers", "4"]
+    networks:
+      - fcm-internal
+
+  nginx:
+    image: nginx:alpine
+    container_name: fcm-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/ssl/certs:ro
+      - ../apps/user-app/dist:/usr/share/nginx/html/user-app:ro
+      - ../apps/admin-app/dist:/usr/share/nginx/html/admin-app:ro
+    depends_on:
+      - backend
+    networks:
+      - fcm-internal
+
+networks:
+  fcm-internal:
+    driver: bridge
+
+volumes:
+  mongo_data:

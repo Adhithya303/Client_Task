@@ -301,17 +301,19 @@ If FCM reports the token permanently unregistered (`messaging.UnregisteredError`
 
 | Check | Result |
 |---|---|
-| Backend Test Suite (`pytest -v`) | ✅ 43 tests passed in 2.47s (device registration, web & android platforms, unregistration, admin auth, OAuth2/JWT verification, bcrypt hashing, safe device listing, notification sending, FCM error mapping, reactivation, timeout simulation) |
+| Backend Test Suite (`pytest -v`) | ✅ 46 tests passed in 2.64s (device registration, web & android platforms, unregistration, admin auth, OAuth2/JWT verification, bcrypt hashing, login rate limiting, payload vs token InvalidArgument handling, safe device listing, notification sending, FCM error mapping, reactivation, timeout simulation) |
 | Test DB Isolation | ✅ Verified: tests use `fcm_notification_demo_test` and clean up only test records |
 | User App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
 | User App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 23 files |
-| User App Android Sync (`cap:build`) | ✅ Verified: Capacitor 8 Android project synchronized in 0.136s |
+| User App Android Sync (`cap:build`) | ✅ Verified: Capacitor 8 Android project synchronized in 0.125s |
 | Admin App Build (`tsc -b && vite build`) | ✅ Passed with 0 errors |
 | Admin App Lint (`oxlint`) | ✅ 0 warnings, 0 errors across 12 files |
+| Admin App UI Authentication | ✅ Verified: pure OAuth2 Username/Password login; API-key login tab removed |
 | Git Exclusions Verification | ✅ Verified: `git check-ignore -v` confirms `backend/.env`, keystores, and credentials are strictly ignored |
-| API Authorization & JWT | ✅ Verified: OAuth2 password flow with signed JWT (exp, iss, aud) and bcrypt hashing; X-Admin-Key supported for backward compatibility |
-| Explicit CORS Origins | ✅ Verified: backend strictly binds to `["http://localhost:5173", "http://localhost:5174"]` |
-| Safe Device Responses | ✅ Verified: FCM tokens are masked (`...suffix`), never leaked in responses or logs |
+| API Authorization & JWT | ✅ Verified: strict OAuth2 Bearer JWT authorization; legacy `X-Admin-Key` fallback removed from production and tests |
+| Login Rate Limiting | ✅ Verified: 5 failed attempts per 60s per IP+username enforced; 6th returns 429 Too Many Requests |
+| FCM Invalid Argument Distinction | ✅ Verified: malformed message payloads preserve device tokens; invalid token syntax marks tokens inactive |
+| Android Network Security | ✅ Verified: `network_security_config.xml` enforces HTTPS in release builds and restricts cleartext HTTP to local debug domains (`10.0.2.2`) |
 | Missing Credential Handling | ✅ Verified: missing `GOOGLE_APPLICATION_CREDENTIALS` results in clean degraded status, never 500 crashes |
 
 ---
@@ -323,27 +325,37 @@ If FCM reports the token permanently unregistered (`messaging.UnregisteredError`
    - Official plugin: `@capacitor/push-notifications` (v8.1.3).
    - Gradle Google Services plugin wired in `android/build.gradle` and `android/app/build.gradle`.
    - Android notification channel `default` created with high importance and lockscreen visibility.
-   - Convenient scripts in `apps/user-app/package.json`: `cap:build`, `cap:open`, `cap:sync`.
+   - Network security config (`network_security_config.xml`) enforcing HTTPS in release builds while permitting `10.0.2.2` and `localhost` in debug builds.
+   - Default notification icon (`@mipmap/ic_launcher`) and notification accent color (`@color/colorPrimary`).
 
 2. **Native Push Integration:**
    - Platform-aware `src/services/nativePush.ts` service:
      - On browser: executes modular web Firebase SDK and service worker.
      - On native Android: executes Capacitor native push plugin; suppresses browser service-worker initialization to avoid conflicts.
-     - Android 13+ runtime notification permissions (`POST_NOTIFICATIONS`) requested during user gesture.
-     - Automatic backend synchronization for native FCM tokens under `platform: "android"`.
-     - In-app notification inbox integration for foreground messages; system tray integration for background messages.
-     - Safe notification tap handling validating navigation targets without arbitrary URL execution.
+     - Android 13+ runtime notification permissions (`POST_NOTIFICATIONS`) requested during user gesture with recovery detection on window focus / app state change.
+     - Automatic backend synchronization for native FCM tokens under `platform: "android"` with retry backoff for transient failures.
+     - In-app notification inbox integration for foreground messages (`pushNotificationReceived`).
+     - Safe notification tap handling (`pushNotificationActionPerformed`) validating navigation targets without arbitrary URL execution.
 
 3. **Backend Registration & Payloads:**
    - Backend accepts `platform: "android"` and `platform: "web"`.
    - Added `POST /api/devices/unregister` to mark tokens inactive upon logout or notification disablement.
-   - Enhanced `send_fcm_notification` with `AndroidConfig` (`channel_id="default"`, `priority="high"`, `click_action="OPEN_ACTIVITY"`) and optional string-valued custom data payloads.
+   - Enhanced `send_fcm_notification` with `AndroidConfig` (`channel_id="default"`, `priority="high"`, standard launcher intent) and optional string-valued custom data payloads.
+   - `InvalidArgumentError` handling distinguishes between malformed message payloads (preserving active token status) and invalid token syntax (deactivating token).
 
 4. **Production Authentication & Security:**
    - OAuth2 Password Grant endpoint: `POST /api/auth/token`.
    - Generates signed JWTs (HS256) verifying `exp` (60m), `iat`, `iss`, and `aud`.
    - Secure password hashing using `bcrypt` (12 rounds) with random salts.
+   - Login rate limiter rejects brute-force attacks (>5 attempts/min) with HTTP 429.
    - CLI provisioning tool (`python -m app.cli create-admin`) ensures no public endpoint can create administrative accounts.
-   - Maintained backward compatibility with `X-Admin-Key` header for automated testing and CLI administration.
+   - Legacy `X-Admin-Key` production fallback removed; all protected endpoints require valid Bearer JWT.
+   - In-memory token storage in Admin React UI (cleared on logout or 401 session expiry).
+
+5. **Milestone Completion & Test Status:**
+   - Automated Unit & Integration Tests: ✅ All 46 tests passing.
+   - Web Notification Delivery: ✅ Verified previously with real FCM web tokens.
+   - Android APK Compilation: ⏸ Blocked in current environment because Android SDK (`ANDROID_HOME`) is not installed on this machine and Gradle wrapper download timed out. Requires Android Studio or local Android SDK command line tools.
+   - Physical Device Delivery: ⏳ Pending actual manual test on physical Android hardware once debug APK is installed.
 
 
